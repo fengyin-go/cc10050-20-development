@@ -74,9 +74,9 @@ def export_entries(
 
 
 @router.get("/{module}/{entry_id}", response_model=dict)
-def get_entry(module: str, entry_id: int) -> dict[str, Any]:
+def get_entry(module: str, entry_id: str) -> dict[str, Any]:
     service = require_service(module)
-    entry = service.get_entry(entry_id)
+    entry = service.resolve_entry(entry_id) if hasattr(service, "resolve_entry") else service.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"{service.ENTITY} {entry_id} 不存在或已归档")
     return entry
@@ -92,7 +92,29 @@ def create_entry(module: str, payload: EntryPayload) -> ActionResult:
 
 
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
-def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
+def run_action(
+    module: str,
+    entry_id: str,
+    payload: ActionPayload,
+    request: Request,
+) -> ActionResult:
     service = require_service(module)
-    entry, message = service.run_action(entry_id, payload.action.strip())
-    return ActionResult(ok=entry is not None, message=message, entry=entry)
+    header_key = (
+        request.headers.get("idempotency-key")
+        or request.headers.get("x-idempotency-key")
+        or request.headers.get("x-request-id")
+        or request.headers.get("request-key")
+    )
+    context = {
+        "reviewer": request.headers.get("x-reviewer") or request.headers.get("x-user"),
+        "operator": request.headers.get("x-operator"),
+    }
+    if hasattr(service, "handle_action"):
+        outcome = service.handle_action(
+            entry_id, payload, request_key=payload.request_key or payload.idempotency_key or header_key,
+            context={k: v for k, v in context.items() if v},
+        )
+    else:
+        entry, message = service.run_action(entry_id, payload.action.strip())
+        outcome = {"ok": entry is not None, "message": message, "entry": entry}
+    return ActionResult(**outcome)

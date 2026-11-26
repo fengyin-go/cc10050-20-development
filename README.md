@@ -71,6 +71,43 @@ npm run dev
 | 人工复核队列 | `match_review` | 复核记录 | 记录编号、匹配记录、复核结论 |
 | 采集量指标 | `collect_metrics` | 指标记录 | 统计时间、站点名称、抓取量 |
 
+## 转派审单与 M72 演练
+
+人工复核队列内置 `M72 / 600g` 场景：初始只有甲认领，关联可回查证据 `EV-M72-600G v1`
+和独立样本 `#72`。页面进入「人工复核队列」即可使用甲入口、主管转派和乙的待办入口；
+「规格匹配器」页只展示已确认回执实际核准的证据版本与负责人。
+
+常用接口：
+
+```bash
+# 重置为“只有甲已认领”的初始场景
+curl -X POST http://127.0.0.1:8020/api/match_review/scenario/reset
+
+# 两个入口的办结/可提交状态
+curl 'http://127.0.0.1:8020/api/match_review/M72/context?reviewer=甲'
+curl 'http://127.0.0.1:8020/api/match_review/M72/context?reviewer=乙'
+
+# 未认领/未接手人读取样本会被拒绝；当前归属人可读取
+curl 'http://127.0.0.1:8020/api/match_review/M72/sample?reviewer=乙'
+
+# 主管转派给乙，回执列出移交范围并递增 ownership_version
+curl -X POST http://127.0.0.1:8020/api/match_review/M72/transfer \
+  -H 'Content-Type: application/json' \
+  -d '{"supervisor":"主管","target_reviewer":"乙"}'
+
+# 乙用同一原任务提交；甲的旧身份/旧版本会被拒绝
+curl -X POST http://127.0.0.1:8020/api/match_review/M72/submit \
+  -H 'Content-Type: application/json' \
+  -d '{"reviewer":"乙","conclusion":"核准 600g","idempotency_key":"B-M72-600G-1"}'
+
+# 规格匹配器读取已确认归属，并按确认快照写入匹配结果
+curl -X POST http://127.0.0.1:8020/api/sku_match/apply-confirmed-review \
+  -H 'Content-Type: application/json' -d '{"review_ref":"M72"}'
+```
+
+后端可用 `backend/.venv/bin/python backend/verify_review_handoff.py` 复跑权限、
+幂等重投、证据版本快照和 20 组并行提交/转派竞争校验。
+
 ## 约定
 
 - 全部模块共享`frontend/src/views/WorkbenchView.vue|tsx`和一套资源路由。

@@ -27,14 +27,28 @@ export async function createEntry(
 
 export async function runAction(
   key: string,
-  id: number,
+  id: number | string,
   action: string,
-): Promise<ActionResult> {
+  extra: Record<string, unknown> = {},
+): Promise<any> {
   const response = await request(`/api/${key}/${id}/actions`, {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...extra }),
   })
   return await response.json()
+}
+
+export async function postJson<T = any>(path: string, body: Record<string, unknown> = {}): Promise<T> {
+  const response = await request(path, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return await response.json() as T
+}
+
+export async function getJson<T = any>(path: string): Promise<T> {
+  const response = await request(path)
+  return await response.json() as T
 }
 
 export async function downloadEntries(

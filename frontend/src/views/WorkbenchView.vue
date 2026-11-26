@@ -15,6 +15,19 @@
       </div>
     </header>
 
+    <ReviewHandoffPanel v-if="meta.key === 'match_review'" @changed="reload" />
+    <ConfirmedMatchPanel v-if="meta.key === 'sku_match'" @changed="reload" />
+
+    <div v-if="meta.key === 'match_review'" class="identity-bar" data-testid="review-identity-bar">
+      <span>行内办理身份：</span>
+      <select :value="reviewSession.currentUser" aria-label="行内办理身份" @change="changeReviewUser">
+        <option>甲</option>
+        <option>乙</option>
+        <option>主管</option>
+      </select>
+      <span class="hint">只有当前认领人或接手人可通过/驳回；转派请使用“转派审单”。</span>
+    </div>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -86,6 +99,27 @@
       </form>
     </div>
 
+    <div v-if="showTransfer" class="modal-backdrop" data-testid="transfer-modal">
+      <form class="modal" @submit.prevent="submitTransfer">
+        <h3>转派审单：{{ transferRow?.['记录编号'] }}</h3>
+        <p class="modal-tip">转派后原任务号不变；旧认领人的提交凭证失效，接手人可打开同一批原证据继续办理。</p>
+        <label class="create-field">
+          <span>主管/操作人</span>
+          <input v-model="transferSupervisor" data-testid="transfer-supervisor" required />
+        </label>
+        <label class="create-field">
+          <span>指定复核员</span>
+          <input v-model="transferTarget" data-testid="transfer-target-input" required />
+        </label>
+        <div class="page-actions">
+          <button class="btn" type="button" @click="showTransfer = false">取消</button>
+          <button class="btn primary" data-testid="submit-transfer" type="submit" :disabled="actionLoading">
+            {{ actionLoading ? '转派中…' : '确认转派' }}
+          </button>
+        </div>
+      </form>
+    </div>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条{{ meta.name }}记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -104,6 +138,9 @@ import {
   runAction as applyAction,
 } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
+import { reviewSession, setReviewUser } from '@/domain/reviewSession'
+import ReviewHandoffPanel from './ReviewHandoffPanel.vue'
+import ConfirmedMatchPanel from './ConfirmedMatchPanel.vue'
 
 const props = defineProps<{ moduleKey: string }>()
 const meta = moduleMeta(props.moduleKey)
@@ -115,6 +152,11 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const showTransfer = ref(false)
+const transferRow = ref<EntryRow | null>(null)
+const transferTarget = ref('乙')
+const transferSupervisor = ref('主管')
+const actionLoading = ref(false)
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -165,10 +207,51 @@ async function submitCreate() {
   }
 }
 
-async function runAction(action: string, row: EntryRow) {
+function changeReviewUser(event: Event) {
+  setReviewUser((event.target as HTMLSelectElement).value)
+}
+
+function openTransfer(row: EntryRow) {
+  transferRow.value = row
+  transferTarget.value = '乙'
+  transferSupervisor.value = reviewSession.currentUser === '主管' ? '主管' : '主管'
+  errorMessage.value = ''
+  showTransfer.value = true
+}
+
+async function submitTransfer() {
+  if (!transferRow.value) return
+  actionLoading.value = true
   errorMessage.value = ''
   try {
-    const result = await applyAction(meta.key, Number(row.id), action)
+    const result = await applyAction(meta.key, Number(transferRow.value.id), '转派审单', {
+      supervisor: transferSupervisor.value,
+      target_reviewer: transferTarget.value,
+      idempotency_key: `ROW-TRANSFER-${transferRow.value.id}-${transferTarget.value}`,
+    })
+    if (!result.ok) throw new Error(result.message)
+    showTransfer.value = false
+    await reload()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '转派失败'
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+async function runAction(action: string, row: EntryRow) {
+  if (action === '转派审单') {
+    openTransfer(row)
+    return
+  }
+  errorMessage.value = ''
+  try {
+    const extra: Record<string, unknown> = { reviewer: reviewSession.currentUser }
+    if (action === '通过记录' || action === '驳回记录') {
+      extra.conclusion = row['复核结论'] || undefined
+      extra.idempotency_key = `ROW-${row.id}-${action}-${reviewSession.currentUser}`
+    }
+    const result = await applyAction(meta.key, Number(row.id), action, extra)
     if (!result.ok) throw new Error(result.message)
     await reload()
   } catch (error) {
@@ -189,3 +272,27 @@ async function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.identity-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eef6ff;
+  border: 1px solid #bee3f8;
+}
+.identity-bar select {
+  padding: 6px 8px;
+}
+.identity-bar .hint {
+  color: #4a5568;
+  font-size: 13px;
+}
+.modal-tip {
+  color: #4a5568;
+  line-height: 1.6;
+}
+</style>

@@ -21,10 +21,19 @@ class Store:
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
 
-    def find(self, module: str, entry_id: int) -> dict[str, Any] | None:
+    def find(self, module: str, entry_id: int | str) -> dict[str, Any] | None:
+        text = str(entry_id)
+        try:
+            target_id = int(entry_id)
+        except (TypeError, ValueError):
+            target_id = None
         for row in self.rows(module):
-            if int(row.get("id", 0)) == entry_id:
+            if target_id is not None and int(row.get("id", 0)) == target_id:
                 return row
+            if text and text != "None":
+                for field in ("记录编号", "review_no", "task_no", "code", "业务编号"):
+                    if str(row.get(field, "")) == text:
+                        return row
         return None
 
     def overview(self) -> dict[str, object]:
